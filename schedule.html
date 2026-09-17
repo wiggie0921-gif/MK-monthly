@@ -365,6 +365,15 @@ function restoreResult(){
   LOCKED = !!rec.locked;
   manualEdits.clear(); (rec.manual||[]).forEach(k => manualEdits.add(k));
   UNDO.length = 0;
+  const hardIssues = validate().violations.filter(v => /日：上班|A 早班|M 中班|P 晚班|連續上班|連上四天/.test(v));
+  if (hardIssues.length){
+    RESULT = null; LOCKED = false; manualEdits.clear();
+    document.getElementById('resultSec').style.display = 'none';
+    document.getElementById('status').textContent =
+      `⚠ 已儲存的班表不符合必要條件：${hardIssues[0]}。請重新執行自動排班。`;
+    updateButtons();
+    return;
+  }
   render();
   document.getElementById('status').textContent = LOCKED
     ? `🔒 此月班表已於 ${rec.savedAt} 鎖定 — 唯讀回顧中（可按「解除鎖定」修改）`
