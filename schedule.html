@@ -258,7 +258,7 @@ table.sched { border-collapse: collapse; background: var(--bg); }
   <div class="sec-kicker">Step 2</div>
   <div class="sec-title">國定假日與指休</div>
   <div class="card">
-    <div class="subhead">國定假日（點日期切換；週五、週六日自動視為假日）</div>
+    <div class="subhead">國定假日（點日期切換；週六日自動視為假日；週五不算例假日）</div>
     <div class="mini-cal" id="holiCal"></div>
     <div class="subhead" style="margin-top:20px">指休與 BL/AL 特殊假 — 先選人，再點日期循環：<span style="letter-spacing:0;text-transform:none">空 → 指休 → BL → AL → 清除</span></div>
     <div class="person-chips" id="fixChips"></div>
@@ -441,8 +441,8 @@ function monthInfo(){
 }
 const dowOf = d => { const {y,m} = monthInfo(); return new Date(y, m-1, d).getDay(); };
 const holiSet = () => new Set(S.holidays[S.month] || []);
-const isRest = d => { const w = dowOf(d); return w===0 || w===5 || w===6 || holiSet().has(d); };
-/* 週五、週六、週日與國定假日皆為假日；其餘日期為平日。 */
+const isRest = d => { const w = dowOf(d); return w===0 || w===6 || holiSet().has(d); };
+/* 例假日僅為週六、週日與國定假日；週五是一般日，但有固定五人班別需求。 */
 
 const manualFixed = i => new Set((S.fixed[S.month]||{})[i] || []);
 /* BL/AL 特殊假：{day: 'BL'|'AL'} */
@@ -468,8 +468,10 @@ const blockedOf = i => weeklyDays(i,'work');
 const totalQuota = i => isExcluded(i) ? 0 : S.staff[i].quota + specialSet(i).size;
 
 /* 每日需求：A 固定 1 人、P 固定 3 人；超過第 4 位上班者皆為 M。
-   平日至少 4 人；假日至少 5 人，均不設最高人數。 */
+   週五固定剛好五人（A×1、M×1、P×3），但不視為例假日。
+   週六日與國定假日至少五人；週一至週四至少四人。 */
 function demand(d){
+  if (dowOf(d) === 5) return { m:1, e:3, min:5, cap:5, exact:true };
   return isRest(d)
     ? { m:1, e:3, min:5, cap:Infinity, exact:false }
     : { m:1, e:3, min:4, cap:Infinity, exact:false };
@@ -841,7 +843,7 @@ function render(){
   let h = '<thead><tr><th class="name-col">員工</th>';
   for (let d=1; d<=days; d++){
     const w = dowOf(d), holi = holiSet().has(d);
-    h += `<th class="${holi?'holi':(w===0||w===5||w===6?'wkend':'')}">${d}<span class="dow">${DOW[w]}${holi?' 假':''}</span></th>`;
+    h += `<th class="${holi?'holi':(w===0||w===6?'wkend':'')}">${d}<span class="dow">${DOW[w]}${holi?' 假':''}</span></th>`;
   }
   h += '</tr></thead><tbody>';
   for (let i=0;i<N;i++){
@@ -1017,13 +1019,13 @@ function renderHoliCal(){
   for (let k=0; k<firstDow; k++) h += '<div class="mc-d empty"></div>';
   for (let d=1; d<=days; d++){
     const w = dowOf(d);
-    h += `<div class="mc-d ${w===0||w===5||w===6?'wkend':''} ${hs.has(d)?'holi sel':''}" onclick="toggleHoli(${d})">${d}</div>`;
+    h += `<div class="mc-d ${w===0||w===6?'wkend':''} ${hs.has(d)?'holi sel':''}" onclick="toggleHoli(${d})">${d}</div>`;
   }
   document.getElementById('holiCal').innerHTML = h;
 }
 function toggleHoli(d){
   const w = dowOf(d);
-  if (w===0 || w===5 || w===6) return;
+  if (w===0 || w===6) return;
   const arr = S.holidays[S.month] || [];
   const k = arr.indexOf(d);
   if (k>=0) arr.splice(k,1); else arr.push(d);
@@ -1054,7 +1056,7 @@ function renderFixCal(){
     }
     const selCls = (manual.has(d) || sp) ? 'sel' : '';
     const sub = sp ? `<span class="sub">${sp}</span>` : (manual.has(d) ? '<span class="sub">休</span>' : '');
-    h += `<div class="mc-d ${w===0||w===5||w===6?'wkend':''} ${holiSet().has(d)?'holi':''} ${selCls} ${conflict?'conflict':''}" ${sp?'style="background:var(--gold-dark);border-color:var(--gold-dark)"':''} onclick="toggleFix(${d})">${d}${sub}</div>`;
+    h += `<div class="mc-d ${w===0||w===6?'wkend':''} ${holiSet().has(d)?'holi':''} ${selCls} ${conflict?'conflict':''}" ${sp?'style="background:var(--gold-dark);border-color:var(--gold-dark)"':''} onclick="toggleFix(${d})">${d}${sub}</div>`;
   }
   document.getElementById('fixCal').innerHTML = h;
 }
@@ -1161,7 +1163,7 @@ function renderViewer(){
   let h = '<thead><tr><th class="name-col">員工</th>';
   for (let d=1; d<=rec.days; d++){
     const w = dow(d), hl = holi.has(d);
-    h += `<th class="${hl?'holi':(w===0||w===5||w===6?'wkend':'')}" ${d===todayD?'style="background:var(--gold-wash);color:var(--gold-dark);font-weight:700"':''}>${d}<span class="dow">${DOW[w]}${hl?' 假':''}</span></th>`;
+    h += `<th class="${hl?'holi':(w===0||w===6?'wkend':'')}" ${d===todayD?'style="background:var(--gold-wash);color:var(--gold-dark);font-weight:700"':''}>${d}<span class="dow">${DOW[w]}${hl?' 假':''}</span></th>`;
   }
   h += '</tr></thead><tbody>';
   rec.staff.forEach((p,i) => {
