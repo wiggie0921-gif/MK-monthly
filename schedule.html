@@ -630,11 +630,34 @@ function enforceDailyCoverage(off, cfg){
             off[i].delete(d); off[i].add(to);
             const score = scoreOff(off, cfg);
             off[i].delete(to); off[i].add(d);
-            if (!best || score < best.score) best = { i, to, score };
+            if (!best || score < best.score) best = { i, to, score, swap:false };
+          }
+        }
+        if (!best){
+          for (let i=0; i<N; i++){
+            if (!cfg.active[i] || !off[i].has(d) || fixed[i].has(d)) continue;
+            for (let j=0; j<N; j++){
+              if (i===j || !cfg.active[j] || off[j].has(d)) continue;
+              for (let to=1; to<=days; to++){
+                if (to===d || off[i].has(to) || !off[j].has(to)) continue;
+                if (blocked[i].has(to) || fixed[j].has(to) || blocked[j].has(d)) continue;
+                off[i].delete(d); off[i].add(to);
+                off[j].delete(to); off[j].add(d);
+                const score = scoreOff(off, cfg);
+                off[i].delete(to); off[i].add(d);
+                off[j].delete(d); off[j].add(to);
+                if (!best || score < best.score) best = { i, j, to, score, swap:true };
+              }
+            }
           }
         }
         if (!best) return cur;
-        off[best.i].delete(d); off[best.i].add(best.to);
+        if (best.swap){
+          off[best.i].delete(d); off[best.i].add(best.to);
+          off[best.j].delete(best.to); off[best.j].add(d);
+        } else {
+          off[best.i].delete(d); off[best.i].add(best.to);
+        }
         cur = best.score; moved = true;
       }
     }
@@ -748,6 +771,40 @@ function staffingFeasibility(cfg){
   if (plannedOff > maxOff) return `目前休假總數 ${plannedOff} 天，但每日最低人力下最多只能安排 ${maxOff} 天休假，超出 ${plannedOff-maxOff} 天。`;
   return '';
 }
+function randForAL(s){ return () => { s = (s*1664525 + 1013904223) % 4294967296; return s/4294967296; }; }
+
+function findSingleALRelief(cfg, seed){
+  for (let i=0; i<cfg.N; i++){
+    const special = specialOf(i);
+    for (const [rawDay, code] of Object.entries(special)){
+      const d = Number(rawDay);
+      if (code !== 'AL') continue;
+      /* 若同日另有指休或週律休，移除 AL 也不會增加可上班人力。 */
+      if (manualFixed(i).has(d) || weeklyDays(i,'off').has(d)) continue;
+      const relaxed = {
+        ...cfg,
+        fixed: cfg.fixed.map((set,j) => j===i ? new Set([...set].filter(x => x!==d)) : new Set(set)),
+        special: cfg.special.map((set,j) => j===i ? new Set([...set].filter(x => x!==d)) : new Set(set)),
+        quotas: cfg.quotas.map((q,j) => j===i ? q-1 : q),
+        allowSecondFour: true,
+      };
+      let best = null;
+      for (let r=0; r<8; r++){
+        const sol = solveOff(relaxed, randForAL(seed + i*104729 + d*7919 + r));
+        if (!best || sol.score < best.score) best = sol;
+        if (best.score === 0) break;
+      }
+      const grid = assignShifts(best.off, relaxed);
+      const oldResult = RESULT;
+      RESULT = { grid, days: cfg.days, month: S.month, offScore: best.score, allowSecondFour:true };
+      const hardIssues = validate().violations.filter(v => /日：上班|A 早班|M 中班|P 晚班|連續上班|連上四天/.test(v));
+      RESULT = oldResult;
+      if (!hardIssues.length) return { i, d, code };
+    }
+  }
+  return null;
+}
+
 function generate(){
   if (LOCKED){ document.getElementById('status').textContent = '🔒 班表已鎖定，請先解除鎖定'; return; }
   const btn = document.getElementById('genBtn');
@@ -826,9 +883,12 @@ function generate(){
       usedEmergencyFour = true;
     }
     if (staffingIssues.length){
+      const alRelief = findSingleALRelief(cfg, seed);
       RESULT = null;
       document.getElementById('resultSec').style.display = 'none';
-      document.getElementById('status').textContent = `⚠ 無法在必要條件下產出班表：${staffingIssues[0]}。請調整固定休、指休或特殊假後再試。`;
+      document.getElementById('status').textContent = alRelief
+        ? `⚠ 原始條件無解：${staffingIssues[0]}。試算顯示：若暫時移除 ${S.staff[alRelief.i].name} 的 ${alRelief.d} 日 AL，可滿足必要人力；請由店長確認後再修改該筆 AL。`
+        : `⚠ 無法在必要條件下產出班表：${staffingIssues[0]}。已試算單筆 AL 調整仍無解，請調整固定休、指休或特殊假後再試。`;
       btn.disabled = false;
       return;
     }
@@ -894,7 +954,14 @@ function validate(){
     let m=0, mid=0, e=0, workers=0;
     for (let i=0;i<N;i++){ if (isExcluded(i)) continue; const s=grid[i][d]; if(s!==3)workers++; if(s===0)m++; else if(s===1)mid++; else if(s===2)e++; }
     const dem = demand(d);
-    if (workers < dem.min || workers > dem.cap) v.push(`${d} 日：上班 ${workers} 人，應為 ${dem.min}–${dem.cap} 人`);
+    if (workers < dem.min || workers > dem.cap){
+      const offDetail = [];
+      for (let i=0; i<N; i++){
+        if (isExcluded(i) || grid[i][d] !== 3) continue;
+        offDetail.push(S.staff[i].name + (fixedOf(i).has(d) ? '（固定休）' : '（可移動休）'));
+      }
+      v.push(`${d} 日：上班 ${workers} 人，應為 ${dem.min}–${dem.cap} 人；休假：${offDetail.join("、")}`);
+    }
     const needMid = Math.max(0, workers - dem.m - dem.e);
     if (m !== dem.m) v.push(`${d} 日：A 早班 ${m} 人，應為 ${dem.m} 人`);
     if (mid !== needMid) v.push(`${d} 日：M 中班 ${mid} 人，應為 ${needMid} 人`);
