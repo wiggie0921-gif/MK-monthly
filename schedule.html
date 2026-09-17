@@ -329,7 +329,7 @@ table.sched { border-collapse: collapse; background: var(--bg); }
       BL/AL 特殊假不計入此限制）
    3. 週一至週四固定 4 人：A 早班 1、P 晚班 3；週五至週日與例假日固定 5 人：A 早班 1、M 中班 1、P 晚班 3
       （晚班 P 在所有日期均固定 3 人）
-   4. 連上 2–3 天最理想；連四會哇哇叫（重罰）；連五爆炸（禁止）
+   4. 連上 2–3 天最理想；連四全月最多一次；連五爆炸（禁止）
    5. 早班天數各人差距 ≤ ±1
    6. 管理職互斥：三人不可同天全休（或最嚴格：任兩人不可同休）
    7. 指休、BL/AL、週律（固定休／固定班）為硬條件
@@ -517,11 +517,13 @@ function scoreOff(off, cfg){
     if (restDays === 3) sc += 60;                          /* 3 天可通融，但優先 2 天 */
     if (restDays < 2) sc += 120 * (2 - restDays);          /* 假日至少休 2（公平性） */
     let run = (cfg.prevRuns || [])[i] || 0;
+    let fourRuns = 0;
     for (let d=1; d<=days; d++){
       if (off[i].has(d)) { if (run === 1) sc += 5; run = 0; }
-      else { run++; if (run === 4) sc += 300; else if (run > 4) sc += 5000; }  /* 優先連三；連四僅無解時通融；連五禁止 */
+      else { run++; if (run === 4) { fourRuns++; sc += 300; } else if (run > 4) sc += 1000000; }  /* 優先連三；連四僅無解時通融；連五禁止 */
     }
     if (run > 4) sc += 500 * (run - 4);
+    if (fourRuns > 1) sc += 1000000 * (fourRuns - 1);
   }
   for (let d=1; d<=days; d++){
     const workers = cfg.activeN - offCount[d];
@@ -759,11 +761,11 @@ function generate(){
     const grid = assignShifts(best.off, cfg);
     RESULT = { grid, days, month: S.month, offScore: best.score };
     const conflicts = validate().violations;
-        const staffingIssues = conflicts.filter(v => /日：上班|A 早班|M 中班|P 晚班/.test(v));
+        const staffingIssues = conflicts.filter(v => /日：上班|A 早班|M 中班|P 晚班|連續上班|連上四天/.test(v));
     if (staffingIssues.length){
       RESULT = null;
       document.getElementById('resultSec').style.display = 'none';
-      document.getElementById('status').textContent = `⚠ 無法在每日人力硬性條件下產出班表：${staffingIssues[0]}。請調整固定休、指休或特殊假後再試。`;
+      document.getElementById('status').textContent = `⚠ 無法在必要條件下產出班表：${staffingIssues[0]}。請調整固定休、指休或特殊假後再試。`;
       btn.disabled = false;
       return;
     }
@@ -796,7 +798,7 @@ function validate(){
   for (let i=0;i<N;i++){
     if (isExcluded(i)){ stats.push({ offN:0, restOff:0, spN:0, m:0, mid:0, e:0, maxRun:0 }); continue; }
     const sp = specialSet(i);
-    let offN=0, restOff=0, spN=0, m=0, mid=0, e=0, maxRun=0, run=prevRuns[i] || 0;
+    let offN=0, restOff=0, spN=0, m=0, mid=0, e=0, maxRun=0, run=prevRuns[i] || 0, fourRuns=0;
     for (let d=1; d<=days; d++){
       const s = grid[i][d];
       if (s===3){
@@ -804,14 +806,15 @@ function validate(){
         if (isRest(d) && !sp.has(d)) restOff++;
         run=0;
       }
-      else { run++; maxRun = Math.max(maxRun, run); if (s===0) m++; else if (s===1) mid++; else e++; }
+      else { run++; maxRun = Math.max(maxRun, run); if (run===4) fourRuns++; if (s===0) m++; else if (s===1) mid++; else e++; }
     }
     mCounts.push(m);
-    stats.push({ offN, restOff, spN, m, mid, e, maxRun });
+    stats.push({ offN, restOff, spN, m, mid, e, maxRun, fourRuns });
     if (offN !== S.staff[i].quota) v.push(`${S.staff[i].name}：正常休假 ${offN} 天 ≠ 額度 ${S.staff[i].quota} 天`);
     if (restOff > 3) v.push(`${S.staff[i].name}：假日休了 ${restOff} 天（上限 3 天）`);
     if (restOff < 2) v.push(`${S.staff[i].name}：假日只休 ${restOff} 天（建議 2–3 天，公平性提醒）`);
-    if (maxRun > 4) v.push(`${S.staff[i].name}：連續上班 ${maxRun} 天（連五爆炸，禁止）`);
+    if (maxRun > 4) v.push(`${S.staff[i].name}：連續上班 ${maxRun} 天（最多四天）`);
+    if (fourRuns > 1) v.push(`${S.staff[i].name}：連上四天共 ${fourRuns} 次（全月最多一次）`);
     for (const d of fixedOf(i)) if (grid[i][d] !== 3) v.push(`${S.staff[i].name}：${d} 日為指休/固定休/特殊假，卻被排班`);
     for (const d of blockedOf(i)) if (grid[i][d] === 3) v.push(`${S.staff[i].name}：${d} 日為週律固定上班，卻排了休假`);
   }
@@ -1227,6 +1230,8 @@ function buildPubRecord(){
 }
 async function publish(){
   if (!RESULT){ alert('請先產生班表'); return; }
+  const hardIssues = validate().violations.filter(v => /日：上班|A 早班|M 中班|P 晚班|連續上班|連上四天/.test(v));
+  if (hardIssues.length){ alert('無法發布：' + hardIssues[0] + '。請先調整班表。'); return; }
   let token = localStorage.getItem('mk-gh-token');
   if (!token){
     token = prompt(
