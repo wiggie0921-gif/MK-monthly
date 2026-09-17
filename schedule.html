@@ -714,11 +714,11 @@ function generate(){
       const fx = fixedOf(i), bl = blockedOf(i);
       if (fx.size > totalQuota(i)){
         document.getElementById('status').textContent = `⚠ ${S.staff[i].name}：固定休＋指休＋特殊假共 ${fx.size} 天 > 總額度 ${totalQuota(i)} 天（正常 ${S.staff[i].quota}＋特假 ${specialSet(i).size}）`;
-        btn.disabled = false; return;
+        /* 不阻止產出，保留給店長手動調整 */
       }
       for (const d of manualFixed(i)) if (bl.has(d)){
         document.getElementById('status').textContent = `⚠ ${S.staff[i].name}：${d} 日指休與週律固定上班衝突`;
-        btn.disabled = false; return;
+        /* 不阻止產出，保留給店長手動調整 */
       }
     }
     /* 預檢 2：最嚴格互斥模式可行性 */
@@ -731,7 +731,7 @@ function generate(){
       if (trioQuota > days || needRest > allowRest){
         document.getElementById('status').textContent =
           `⚠ 無解：互斥 ${trioIdx.length} 人共 ${trioQuota} 天休假需完全不重疊，平日僅 ${weekdays} 天，至少 ${needRest} 天須落在假日，但假日上限共 ${allowRest} 天。請改用「至少一人在班」。`;
-        btn.disabled = false; return;
+        /* 不阻止產出，保留給店長手動調整 */
       }
     }
     const cfg = {
@@ -747,12 +747,7 @@ function generate(){
       prevRuns: previousWorkRuns(),
     };
     const feasibility = staffingFeasibility(cfg);
-    if (feasibility){
-      RESULT = null;
-      document.getElementById('resultSec').style.display = 'none';
-      document.getElementById('status').textContent = '⚠ 無法產生零衝突班表：' + feasibility + ' 請調整休假額度或每日人力規則後再試。';
-      btn.disabled = false; return;
-    }
+    /* 人力預檢僅作為衝突提示，不阻止班表產出。 */
     let best = null;
     let seed = Date.now() % 100000;
     const rand = s => () => { s = (s*1664525 + 1013904223) % 4294967296; return s/4294967296; };
