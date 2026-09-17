@@ -570,7 +570,7 @@ function solveOff(cfg, rng){
   }
   let cur = scoreOff(off, cfg);
   let T = 60;
-  const ITER = 24000;
+  const ITER = cfg.iterations || 9000;
   for (let t=0; t<ITER; t++){
     T *= 0.99975;
     if (rng() < 0.5){
@@ -787,9 +787,10 @@ function findSingleALRelief(cfg, seed){
         special: cfg.special.map((set,j) => j===i ? new Set([...set].filter(x => x!==d)) : new Set(set)),
         quotas: cfg.quotas.map((q,j) => j===i ? q-1 : q),
         allowSecondFour: true,
+        iterations: 2000,
       };
       let best = null;
-      for (let r=0; r<8; r++){
+      for (let r=0; r<1; r++){
         const sol = solveOff(relaxed, randForAL(seed + i*104729 + d*7919 + r));
         if (!best || sol.score < best.score) best = sol;
         if (best.score === 0) break;
@@ -857,7 +858,7 @@ function generate(){
     let best = null;
     let seed = Date.now() % 100000;
     const rand = s => () => { s = (s*1664525 + 1013904223) % 4294967296; return s/4294967296; };
-    for (let r=0; r<8; r++){
+    for (let r=0; r<4; r++){
       const sol = solveOff(cfg, rand(seed + r*7919));
       if (!best || sol.score < best.score) best = sol;
       if (best.score === 0) break;
@@ -869,9 +870,9 @@ function generate(){
     let usedEmergencyFour = false;
     /* 第一階段無解時，才啟用第二次連四的最小範圍備案。 */
     if (staffingIssues.length){
-      const emergencyCfg = { ...cfg, allowSecondFour: true };
+      const emergencyCfg = { ...cfg, allowSecondFour: true, iterations: 7000 };
       let emergencyBest = null;
-      for (let r=0; r<8; r++){
+      for (let r=0; r<4; r++){
         const sol = solveOff(emergencyCfg, rand(seed + 50000 + r*7919));
         if (!emergencyBest || sol.score < emergencyBest.score) emergencyBest = sol;
         if (emergencyBest.score === 0) break;
