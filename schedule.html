@@ -278,6 +278,7 @@ table.sched { border-collapse: collapse; background: var(--bg); }
     <button class="btn" id="pubBtn" style="display:none">📤 發布給同事</button>
     <button class="btn" id="pdfBtn">匯出 PDF 給主管</button>
     <button class="btn ghost" id="csvBtn">匯出 CSV</button>
+    <button class="btn ghost" id="excelBtn">⬇ 下載 Excel</button>
     <span class="status" id="status"></span>
   </div>
 </section>
@@ -764,10 +765,12 @@ function generate(){
     RESULT = { grid, days, month: S.month, offScore: best.score };
     const conflicts = validate().violations;
     if (conflicts.length){
-      RESULT = null;
-      document.getElementById('resultSec').style.display = 'none';
-      document.getElementById('status').textContent = `⚠ 找不到零衝突班表（仍有 ${conflicts.length} 項）；系統已停止產出，請調整固定休、休假額度或人力規則後再試。`;
-      btn.disabled = false; return;
+      /* 即使有衝突仍保留結果，讓店長可先手動微調。 */
+      UNDO.length = 0; manualEdits.clear();
+      render();
+      btn.disabled = false;
+      document.getElementById('status').textContent = `⚠ 已產出班表，仍有 ${conflicts.length} 項條件衝突；請在下方直接手動調整，完成後再發布。`;
+      return;
     }
     UNDO.length = 0; manualEdits.clear();
     render();
@@ -943,6 +946,25 @@ function exportCsv(){
   a.click();
 }
 
+
+function exportExcel(){
+  if (!RESULT) return alert('請先產生班表');
+  const { grid, days } = RESULT;
+  const esc = v => String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let h = '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Type" content="application/vnd.ms-excel; charset=UTF-8"></head><body>';
+  h += '<table border="1"><tr><th>員工</th><th>職級</th>' + Array.from({length:days}, (_,k) => '<th>'+ (k+1) +'('+DOW[dowOf(k+1)]+')</th>').join('') + '</tr>';
+  S.staff.forEach((p,i) => {
+    const sp = specialOf(i);
+    h += '<tr><td>'+esc(p.name)+'</td><td>'+esc(p.role)+'</td>';
+    for(let d=1; d<=days; d++){ const s=grid[i][d]; const label=p.excluded ? '—' : ((s===3 && sp[d]) ? sp[d] : SHIFT_NAME[s]); h += '<td>'+esc(label)+'</td>'; }
+    h += '</tr>';
+  });
+  h += '</table></body></html>';
+  const blob = new Blob(['\ufeff' + h], {type:'application/vnd.ms-excel;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `MK排班_${S.month}.xls`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 /* ============================================================
    SETTINGS UI
 ============================================================ */
@@ -1093,6 +1115,7 @@ document.getElementById('monthInput').addEventListener('change', e => { S.month 
 document.getElementById('addStaff').addEventListener('click', () => { S.staff.push({ name:'新員工', role:'SA', quota:10, week:{} }); syncAll(); });
 document.getElementById('genBtn').addEventListener('click', generate);
 document.getElementById('csvBtn').addEventListener('click', exportCsv);
+document.getElementById('excelBtn').addEventListener('click', exportExcel);
 document.getElementById('undoBtn').addEventListener('click', undo);
 document.getElementById('lockBtn').addEventListener('click', toggleLock);
 document.getElementById('clearBtn').addEventListener('click', clearResult);
