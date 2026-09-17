@@ -526,9 +526,9 @@ function scoreOff(off, cfg){
   for (let d=1; d<=days; d++){
     const workers = cfg.activeN - offCount[d];
     const dem = demand(d);
-    if (workers < dem.min) sc += 1000 * (dem.min - workers);
-    if (workers > dem.cap) sc += 1000 * (workers - dem.cap);
-    if (dem.exact && workers !== dem.cap) sc += 1000 * Math.abs(workers - dem.cap); /* 假日固定 5 人 */
+    if (workers < dem.min) sc += 1000000 * (dem.min - workers);
+    if (workers > dem.cap) sc += 1000000 * (workers - dem.cap);
+    if (dem.exact && workers !== dem.cap) sc += 1000000 * Math.abs(workers - dem.cap); /* 假日固定 5 人 */
   }
   if (trioIdx.length >= 2){
     const th = cfg.trioMode === 'pair' ? 2 : Math.min(3, trioIdx.length);
@@ -759,6 +759,14 @@ function generate(){
     const grid = assignShifts(best.off, cfg);
     RESULT = { grid, days, month: S.month, offScore: best.score };
     const conflicts = validate().violations;
+        const staffingIssues = conflicts.filter(v => /日：上班|A 早班|M 中班|P 晚班/.test(v));
+    if (staffingIssues.length){
+      RESULT = null;
+      document.getElementById('resultSec').style.display = 'none';
+      document.getElementById('status').textContent = `⚠ 無法在每日人力硬性條件下產出班表：${staffingIssues[0]}。請調整固定休、指休或特殊假後再試。`;
+      btn.disabled = false;
+      return;
+    }
     if (conflicts.length){
       /* 即使有衝突仍保留結果，讓店長可先手動微調。 */
       UNDO.length = 0; manualEdits.clear();
