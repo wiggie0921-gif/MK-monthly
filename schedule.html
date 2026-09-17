@@ -65,6 +65,8 @@ table.staff { border-collapse: collapse; width: 100%; min-width: 640px; }
 .staff input[type="number"] { width: 58px; border-color: var(--hair); }
 .staff select { border-color: var(--hair); padding: 6px 8px; }
 .staff .del { cursor: pointer; color: var(--crit); background: none; border: none; font-size: 15px; }
+.staff .move { cursor: pointer; color: var(--ink2); background: none; border: 1px solid var(--hair); padding: 2px 6px; margin-right: 3px; font-size: 12px; }
+.staff .move:disabled { cursor: default; opacity: .28; }
 /* 週律 cycler: 空→休→班 */
 .wkrow { display: inline-flex; gap: 3px; }
 .wk {
@@ -891,7 +893,7 @@ function renderStaff(){
       <td><select onchange="S.staff[${i}].role=this.value;saveState();if(RESULT)render()">${ROLES.map(r=>`<option ${p.role===r?'selected':''}>${r}</option>`).join('')}</select></td>
       <td><input type="number" min="0" max="15" value="${p.quota}" onchange="S.staff[${i}].quota=Number(this.value);saveState();renderFixChips()"> 天</td>
       <td>${weekCells(i)}</td>
-      <td><button class="del" onclick="delStaff(${i})">✕</button></td>
+      <td><button class="move" onclick="moveStaff(${i},-1)" ${i===0?'disabled':''} title="上移">↑</button><button class="move" onclick="moveStaff(${i},1)" ${i===S.staff.length-1?'disabled':''} title="下移">↓</button><button class="del" onclick="delStaff(${i})">✕</button></td>
     </tr>`).join('');
   renderTrio(); renderFixChips(); saveState();
 }
@@ -903,6 +905,30 @@ function delStaff(i){
   Object.keys(fx).forEach(k => { const n = Number(k); if (n < i) nf[n] = fx[k]; else if (n > i) nf[n-1] = fx[k]; });
   S.fixed[S.month] = nf;
   if (selPerson >= S.staff.length) selPerson = 0;
+  syncAll();
+}
+function moveStaff(i, direction){
+  const j = i + direction;
+  if (j < 0 || j >= S.staff.length) return;
+  [S.staff[i], S.staff[j]] = [S.staff[j], S.staff[i]];
+  /* 指休與特殊假用人員索引儲存；調整順序時同步交換，避免資料對到錯的人。 */
+  ['fixed','special'].forEach(key => {
+    Object.values(S[key] || {}).forEach(monthData => {
+      const swapped = {};
+      Object.entries(monthData).forEach(([idx, value]) => {
+        const n = Number(idx);
+        swapped[n === i ? j : (n === j ? i : n)] = value;
+      });
+      Object.keys(monthData).forEach(k => delete monthData[k]);
+      Object.assign(monthData, swapped);
+    });
+  });
+  if (selPerson === i) selPerson = j; else if (selPerson === j) selPerson = i;
+  /* 排序改變後需重新產生本月班表，避免舊結果的人名與格子錯位。 */
+  RESULT = null; LOCKED = false; UNDO.length = 0; manualEdits.clear();
+  const saved = loadSavedAll(); delete saved[S.month];
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(saved)); } catch(e){}
+  document.getElementById('resultSec').style.display = 'none';
   syncAll();
 }
 function renderTrio(){
