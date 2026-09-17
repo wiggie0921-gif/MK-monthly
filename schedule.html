@@ -329,7 +329,7 @@ table.sched { border-collapse: collapse; background: var(--bg); }
       BL/AL 特殊假不計入此限制）
    3. 週一至週四固定 4 人：A 早班 1、P 晚班 3；週五至週日與例假日固定 5 人：A 早班 1、M 中班 1、P 晚班 3
       （晚班 P 在所有日期均固定 3 人）
-   4. 連上 2–3 天最理想；連四全月最多一次；連五爆炸（禁止）
+   4. 連上 2–3 天最理想；先以連四全月最多一次求解，無解才可為補足人力使用第二次連四；連五禁止
    5. 早班天數各人差距 ≤ ±1
    6. 管理職互斥：三人不可同天全休（或最嚴格：任兩人不可同休）
    7. 指休、BL/AL、週律（固定休／固定班）為硬條件
@@ -532,7 +532,9 @@ function scoreOff(off, cfg){
       else { run++; if (run === 4) { fourRuns++; sc += 300; } else if (run > 4) sc += 1000000; }  /* 優先連三；連四僅無解時通融；連五禁止 */
     }
     if (run > 4) sc += 500 * (run - 4);
-    if (fourRuns > 1) sc += 1000000 * (fourRuns - 1);
+    const maxFourRuns = cfg.allowSecondFour ? 2 : 1;
+    if (fourRuns > 1 && cfg.allowSecondFour) sc += 2500 * (fourRuns - 1);
+    if (fourRuns > maxFourRuns) sc += 1000000 * (fourRuns - maxFourRuns);
   }
   for (let d=1; d<=days; d++){
     const workers = cfg.activeN - offCount[d];
@@ -602,7 +604,43 @@ function solveOff(cfg, rng){
     }
   }
   cur = repairOff(off, cfg, cur);
+  cur = enforceDailyCoverage(off, cfg);
+  cur = repairOff(off, cfg, cur);
   return { off, score: cur };
+}
+
+function enforceDailyCoverage(off, cfg){
+  const { days, N, fixed, blocked } = cfg;
+  const workersOn = d => {
+    let n = 0;
+    for (let i=0; i<N; i++) if (cfg.active[i] && !off[i].has(d)) n++;
+    return n;
+  };
+  let cur = scoreOff(off, cfg);
+  for (let pass=0; pass<days*N; pass++){
+    let moved = false;
+    for (let d=1; d<=days; d++){
+      while (workersOn(d) < demand(d).min){
+        let best = null;
+        for (let i=0; i<N; i++){
+          if (!cfg.active[i] || !off[i].has(d) || fixed[i].has(d)) continue;
+          for (let to=1; to<=days; to++){
+            if (to===d || off[i].has(to) || blocked[i].has(to)) continue;
+            if (workersOn(to) - 1 < demand(to).min) continue;
+            off[i].delete(d); off[i].add(to);
+            const score = scoreOff(off, cfg);
+            off[i].delete(to); off[i].add(d);
+            if (!best || score < best.score) best = { i, to, score };
+          }
+        }
+        if (!best) return cur;
+        off[best.i].delete(d); off[best.i].add(best.to);
+        cur = best.score; moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  return cur;
 }
 
 function repairOff(off, cfg, cur){
@@ -767,10 +805,26 @@ function generate(){
       if (!best || sol.score < best.score) best = sol;
       if (best.score === 0) break;
     }
-    const grid = assignShifts(best.off, cfg);
-    RESULT = { grid, days, month: S.month, offScore: best.score };
-    const conflicts = validate().violations;
-        const staffingIssues = conflicts.filter(v => /日：上班|A 早班|M 中班|P 晚班|連續上班|連上四天/.test(v));
+    let grid = assignShifts(best.off, cfg);
+    RESULT = { grid, days, month: S.month, offScore: best.score, allowSecondFour: false };
+    let conflicts = validate().violations;
+    let staffingIssues = conflicts.filter(v => /日：上班|A 早班|M 中班|P 晚班|連續上班|連上四天/.test(v));
+    let usedEmergencyFour = false;
+    /* 第一階段無解時，才啟用第二次連四的最小範圍備案。 */
+    if (staffingIssues.length){
+      const emergencyCfg = { ...cfg, allowSecondFour: true };
+      let emergencyBest = null;
+      for (let r=0; r<8; r++){
+        const sol = solveOff(emergencyCfg, rand(seed + 50000 + r*7919));
+        if (!emergencyBest || sol.score < emergencyBest.score) emergencyBest = sol;
+        if (emergencyBest.score === 0) break;
+      }
+      grid = assignShifts(emergencyBest.off, emergencyCfg);
+      RESULT = { grid, days, month: S.month, offScore: emergencyBest.score, allowSecondFour: true };
+      conflicts = validate().violations;
+      staffingIssues = conflicts.filter(v => /日：上班|A 早班|M 中班|P 晚班|連續上班|連上四天/.test(v));
+      usedEmergencyFour = true;
+    }
     if (staffingIssues.length){
       RESULT = null;
       document.getElementById('resultSec').style.display = 'none';
@@ -789,7 +843,9 @@ function generate(){
     UNDO.length = 0; manualEdits.clear();
     render();
     btn.disabled = false;
-    document.getElementById('status').textContent = '✓ 完成 — 所有排班條件皆滿足';
+    document.getElementById('status').textContent = usedEmergencyFour
+      ? '✓ 完成 — 已以第二次連四備案補足每日人力；仍無人連上五天'
+      : '✓ 完成 — 所有排班條件皆滿足（每人最多一次連四）';
   }, 30);
 }
 
@@ -823,7 +879,8 @@ function validate(){
     if (restOff > 3) v.push(`${S.staff[i].name}：假日休了 ${restOff} 天（上限 3 天）`);
     if (restOff < 2) v.push(`${S.staff[i].name}：假日只休 ${restOff} 天（建議 2–3 天，公平性提醒）`);
     if (maxRun > 4) v.push(`${S.staff[i].name}：連續上班 ${maxRun} 天（最多四天）`);
-    if (fourRuns > 1) v.push(`${S.staff[i].name}：連上四天共 ${fourRuns} 次（全月最多一次）`);
+    const maxFourRuns = RESULT.allowSecondFour ? 2 : 1;
+    if (fourRuns > maxFourRuns) v.push(`${S.staff[i].name}：連上四天共 ${fourRuns} 次（全月最多 ${maxFourRuns} 次）`);
     for (const d of fixedOf(i)) if (grid[i][d] !== 3) v.push(`${S.staff[i].name}：${d} 日為指休/固定休/特殊假，卻被排班`);
     for (const d of blockedOf(i)) if (grid[i][d] === 3) v.push(`${S.staff[i].name}：${d} 日為週律固定上班，卻排了休假`);
   }
