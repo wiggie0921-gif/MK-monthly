@@ -465,6 +465,29 @@ function demand(d){
     : { m:1, e:3, min:4, cap:5, exact:false };
 }
 
+/* 前月月底連上天數：2026-10 依使用者提供的 9 月班表匯入。
+   其他月份則自動讀取已發布的前一月班表。 */
+const IMPORTED_PREV_RUNS = Object.freeze({
+  '2026-10': { Wiggie:1, Liv:2, Demi:1, Kai:0, Bailey:1, Alvin:0, Yvette:0, Vina:6 }
+});
+function previousWorkRuns(){
+  const imported = IMPORTED_PREV_RUNS[S.month];
+  if (imported) return S.staff.map(p => Number(imported[p.name] || 0));
+  const [y,m] = S.month.split('-').map(Number);
+  const dt = new Date(y, m-2, 1);
+  const key = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
+  const prev = (window.MK_SCHED_PUB || {})[key];
+  if (!prev) return S.staff.map(() => 0);
+  const byName = new Map(prev.staff.map((p,i) => [p.name,i]));
+  return S.staff.map(p => {
+    const i = byName.get(p.name);
+    if (i === undefined || !prev.grid[i]) return 0;
+    let run = 0;
+    for (let d=prev.days; d>=1 && prev.grid[i][d] !== 3; d--) run++;
+    return run;
+  });
+}
+
 /* ============================================================
    PHASE 1 — 休假日分配
 ============================================================ */
@@ -479,10 +502,10 @@ function scoreOff(off, cfg){
     if (restDays > 3) sc += 800 * (restDays - 3);          /* 假日休上限 3（硬） */
     if (restDays === 3) sc += 60;                          /* 3 天可通融，但優先 2 天 */
     if (restDays < 2) sc += 120 * (2 - restDays);          /* 假日至少休 2（公平性） */
-    let run = 0;
+    let run = (cfg.prevRuns || [])[i] || 0;
     for (let d=1; d<=days; d++){
       if (off[i].has(d)) { if (run === 1) sc += 5; run = 0; }
-      else { run++; if (run === 4) sc += 60; else if (run > 4) sc += 500; }  /* 連四哇哇叫、連五爆炸 */
+      else { run++; if (run === 4) sc += 300; else if (run > 4) sc += 5000; }  /* 優先連三；連四僅無解時通融；連五禁止 */
     }
     if (run > 4) sc += 500 * (run - 4);
   }
@@ -648,6 +671,18 @@ function assignShifts(off, cfg){
 /* ============================================================
    產生
 ============================================================ */
+function staffingFeasibility(cfg){
+  let minOff = 0, maxOff = 0;
+  for (let d=1; d<=cfg.days; d++){
+    const dem = demand(d);
+    minOff += cfg.N - dem.cap;
+    maxOff += cfg.N - dem.min;
+  }
+  const plannedOff = cfg.quotas.reduce((sum,n) => sum + n, 0);
+  if (plannedOff < minOff) return `目前休假總數 ${plannedOff} 天，但每天最多 ${Math.max(...Array.from({length:cfg.days},(_,i)=>demand(i+1).cap))} 人上班至少需要 ${minOff} 天休假，尚差 ${minOff-plannedOff} 天。`;
+  if (plannedOff > maxOff) return `目前休假總數 ${plannedOff} 天，但每日最低人力下最多只能安排 ${maxOff} 天休假，超出 ${plannedOff-maxOff} 天。`;
+  return '';
+}
 function generate(){
   if (LOCKED){ document.getElementById('status').textContent = '🔒 班表已鎖定，請先解除鎖定'; return; }
   const btn = document.getElementById('genBtn');
@@ -690,7 +725,15 @@ function generate(){
       special: S.staff.map((_,i) => specialSet(i)),
       trioIdx,
       trioMode: S.trioMode,
+      prevRuns: previousWorkRuns(),
     };
+    const feasibility = staffingFeasibility(cfg);
+    if (feasibility){
+      RESULT = null;
+      document.getElementById('resultSec').style.display = 'none';
+      document.getElementById('status').textContent = '⚠ 無法產生零衝突班表：' + feasibility + ' 請調整休假額度或每日人力規則後再試。';
+      btn.disabled = false; return;
+    }
     let best = null;
     let seed = Date.now() % 100000;
     const rand = s => () => { s = (s*1664525 + 1013904223) % 4294967296; return s/4294967296; };
@@ -701,13 +744,17 @@ function generate(){
     }
     const grid = assignShifts(best.off, cfg);
     RESULT = { grid, days, month: S.month, offScore: best.score };
+    const conflicts = validate().violations;
+    if (conflicts.length){
+      RESULT = null;
+      document.getElementById('resultSec').style.display = 'none';
+      document.getElementById('status').textContent = `⚠ 找不到零衝突班表（仍有 ${conflicts.length} 項）；系統已停止產出，請調整固定休、休假額度或人力規則後再試。`;
+      btn.disabled = false; return;
+    }
     UNDO.length = 0; manualEdits.clear();
     render();
     btn.disabled = false;
-    const nViol = validate().violations.length;
-    document.getElementById('status').textContent = nViol === 0
-      ? '✓ 完成 — 所有排班條件皆滿足'
-      : `完成 — 尚有 ${nViol} 項條件衝突，請看下方警告（可手動微調或重按一次換方案）`;
+    document.getElementById('status').textContent = '✓ 完成 — 所有排班條件皆滿足';
   }, 30);
 }
 
@@ -721,9 +768,10 @@ function validate(){
   const stats = [];
   const trioIdx = S.trio.map(n => S.staff.findIndex(s => s.name===n)).filter(i => i>=0);
   const mCounts = [];
+  const prevRuns = previousWorkRuns();
   for (let i=0;i<N;i++){
     const sp = specialSet(i);
-    let offN=0, restOff=0, spN=0, m=0, mid=0, e=0, maxRun=0, run=0;
+    let offN=0, restOff=0, spN=0, m=0, mid=0, e=0, maxRun=0, run=prevRuns[i] || 0;
     for (let d=1; d<=days; d++){
       const s = grid[i][d];
       if (s===3){
