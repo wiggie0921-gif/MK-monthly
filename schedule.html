@@ -200,9 +200,9 @@ table.sched { border-collapse: collapse; background: var(--bg); }
       <div class="person-chips" id="pubChips" style="margin-top:8px"></div>
       <div class="grid-scroll"><table class="sched" id="pubTable"></table></div>
       <div class="legend">
-        <span><i style="background:var(--m-wash)"></i>早班</span>
-        <span><i style="background:var(--mid-wash)"></i>中班</span>
-        <span><i style="background:var(--e-ink)"></i>晚班</span>
+        <span><i style="background:var(--m-wash)"></i>A 早班</span>
+        <span><i style="background:var(--mid-wash)"></i>M 中班</span>
+        <span><i style="background:var(--e-ink)"></i>P 晚班</span>
         <span><i style="background:#f1f0ec"></i>休假</span>
         <span style="color:var(--gold-dark)">BL/AL = 特殊假</span>
       </div>
@@ -290,9 +290,9 @@ table.sched { border-collapse: collapse; background: var(--bg); }
   <div class="sec-kicker no-print">Result</div>
   <div class="sec-title" id="resultTitle">排班表</div>
   <div class="legend">
-    <span><i style="background:var(--m-wash)"></i>早班</span>
-    <span><i style="background:var(--mid-wash)"></i>中班（第 5 人）</span>
-    <span><i style="background:var(--e-ink)"></i>晚班</span>
+    <span><i style="background:var(--m-wash)"></i>A 早班</span>
+    <span><i style="background:var(--mid-wash)"></i>M 中班（僅 5 人日）</span>
+    <span><i style="background:var(--e-ink)"></i>P 晚班</span>
     <span><i style="background:#f1f0ec"></i>休假</span>
     <span>底線 = 指休/固定休</span>
     <span class="no-print" style="color:var(--gold-dark)">點任一格手動微調（早→中→晚→休）— 允許違規，系統只提醒不阻擋；紅點 = 手動改過</span>
@@ -324,15 +324,15 @@ table.sched { border-collapse: collapse; background: var(--bg); }
    1. 每人每月正常休假 10 天（可調）；BL/AL 特殊假另外加，不佔額度
    2. 假日（週六日＋國定假日）每人休 2–3 天（>3 違規、<2 提醒；
       BL/AL 特殊假不計入此限制）
-   3. 每日基本人力 4 人：早 1、晚 3；湊得到第 5 人 → 開 1 個中班
-      （週五與假日優先開中班）
+   3. 週一至週四固定 4 人：A 早班 1、P 晚班 3；週五至週日與例假日固定 5 人：A 早班 1、M 中班 1、P 晚班 3
+      （晚班 P 在所有日期均固定 3 人）
    4. 連上 2–3 天最理想；連四會哇哇叫（重罰）；連五爆炸（禁止）
    5. 早班天數各人差距 ≤ ±1
    6. 管理職互斥：三人不可同天全休（或最嚴格：任兩人不可同休）
    7. 指休、BL/AL、週律（固定休／固定班）為硬條件
 ============================================================ */
 const DOW = ['日','一','二','三','四','五','六'];
-const SHIFT_NAME = ['早','中','晚','休'];
+const SHIFT_NAME = ['A','M','P','休'];
 const ROLES = ['店長','Sup','SSA','SA'];
 const LS_KEY = 'mk-scheduler-v2';
 
@@ -430,8 +430,8 @@ function monthInfo(){
 }
 const dowOf = d => { const {y,m} = monthInfo(); return new Date(y, m-1, d).getDay(); };
 const holiSet = () => new Set(S.holidays[S.month] || []);
-const isRest = d => { const w = dowOf(d); return w===0 || w===6 || holiSet().has(d); };
-const isFri = d => dowOf(d) === 5;
+const isRest = d => { const w = dowOf(d); return w===0 || w===5 || w===6 || holiSet().has(d); };
+/* 週五至週日與例假日固定 5 人；週一至週四固定 4 人。 */
 
 const manualFixed = i => new Set((S.fixed[S.month]||{})[i] || []);
 /* BL/AL 特殊假：{day: 'BL'|'AL'} */
@@ -456,9 +456,12 @@ const blockedOf = i => weeklyDays(i,'work');
 /* 總休假目標 = 正常額度 + 特殊假天數 */
 const totalQuota = i => S.staff[i].quota + specialSet(i).size;
 
-/* 每日需求：基本 4 人（早1晚3），第 5 人開中班；週五/假日偏好 5 人 */
+/* 每日需求：週一至週四固定 A×1、P×3；週五至週日與例假日固定 A×1、M×1、P×3。 */
 function demand(d){
-  return { m:1, e:3, min:4, cap:5, wantMid: isRest(d) || isFri(d) };
+  const fivePersonDay = isRest(d);
+  return fivePersonDay
+    ? { m:1, mid:1, e:3, min:5, cap:5, wantMid:true }
+    : { m:1, mid:0, e:3, min:4, cap:4, wantMid:false };
 }
 
 /* ============================================================
@@ -487,7 +490,7 @@ function scoreOff(off, cfg){
     const dem = demand(d);
     if (workers < dem.min) sc += 1000 * (dem.min - workers);
     if (workers > dem.cap) sc += 8 * (workers - dem.cap);
-    if (dem.wantMid && workers < dem.cap) sc += 15;   /* 假日/週五偏好 5 人開中班 */
+    if (workers !== dem.cap) sc += 1000 * Math.abs(workers - dem.cap); /* 每日人數必須剛好符合規則 */
   }
   if (trioIdx.length >= 2){
     const th = cfg.trioMode === 'pair' ? 2 : Math.min(3, trioIdx.length);
@@ -616,7 +619,7 @@ function assignShifts(off, cfg){
     const morning = workers.slice(0, dem.m);
     morning.forEach(i => { grid[i][d] = 0; mCount[i]++; });
     let rest = workers.slice(dem.m);
-    /* 晚班固定 3 人，其餘全部中班（第 5 人起） */
+    /* 晚班固定 3 人；只有 5 人日固定安排 1 位中班。 */
     const mids = Math.max(0, rest.length - dem.e);
     for (let k=0; k<mids; k++) grid[rest.shift()][d] = 1;
     rest.forEach(i => grid[i][d] = 2);
@@ -748,10 +751,10 @@ function validate(){
     let m=0, mid=0, e=0, workers=0;
     for (let i=0;i<N;i++){ const s=grid[i][d]; if(s!==3)workers++; if(s===0)m++; else if(s===1)mid++; else if(s===2)e++; }
     const dem = demand(d);
-    if (workers < dem.min) v.push(`${d} 日：僅 ${workers} 人上班（最少 ${dem.min} 人）`);
-    if (m < dem.m) v.push(`${d} 日：早班缺 ${dem.m-m} 人`);
-    if (e < dem.e) v.push(`${d} 日：晚班缺 ${dem.e-e} 人`);
-    if (workers >= dem.cap && mid === 0) v.push(`${d} 日：有 ${workers} 人上班但未開中班`);
+    if (workers !== dem.min) v.push(`${d} 日：上班 ${workers} 人，應為 ${dem.min} 人`);
+    if (m !== dem.m) v.push(`${d} 日：A 早班 ${m} 人，應為 ${dem.m} 人`);
+    if (mid !== dem.mid) v.push(`${d} 日：M 中班 ${mid} 人，應為 ${dem.mid} 人`);
+    if (e !== dem.e) v.push(`${d} 日：P 晚班 ${e} 人，應為 ${dem.e} 人`);
   }
   return { violations: v, stats };
 }
@@ -789,18 +792,18 @@ function render(){
     }
     h += '</tr>';
   }
-  h += '</tbody><tfoot><tr><td class="name-col" style="font-weight:400;color:var(--muted)">早/中/晚</td>';
+  h += '</tbody><tfoot><tr><td class="name-col" style="font-weight:400;color:var(--muted)">A/M/P</td>';
   for (let d=1; d<=days; d++){
     const dem = demand(d);
     let m=0, mid=0, e=0, workers=0;
     for (let i=0;i<N;i++){ const s=grid[i][d]; if(s!==3)workers++; if(s===0)m++; else if(s===1)mid++; else if(s===2)e++; }
-    const short = m<dem.m || e<dem.e || workers<dem.min;
+    const short = m!==dem.m || mid!==dem.mid || e!==dem.e || workers!==dem.min;
     h += `<td class="${short?'short':''} num">${m}/${mid}/${e}</td>`;
   }
   h += '</tr></tfoot>';
   document.getElementById('schedTable').innerHTML = h;
 
-  let st = `<thead><tr><th>員工</th><th>職級</th><th>上班</th><th>正常休</th><th>BL/AL</th><th>假日休</th><th>早班</th><th>中班</th><th>晚班</th><th>最長連上</th></tr></thead><tbody>`;
+  let st = `<thead><tr><th>員工</th><th>職級</th><th>上班</th><th>正常休</th><th>BL/AL</th><th>假日休</th><th>A早班</th><th>M中班</th><th>P晚班</th><th>最長連上</th></tr></thead><tbody>`;
   for (let i=0;i<N;i++){
     const s = stats[i];
     st += `<tr><td>${S.staff[i].name}</td><td>${S.staff[i].role}</td><td class="num">${days - s.offN - s.spN}</td>
@@ -1117,17 +1120,17 @@ async function publish(){
     const pub = { ...pubData() };
     pub[S.month] = buildPubRecord();
     const content = '/* 已發布的班表 — 由排班頁「發布給同事」自動更新，請勿手動編輯 */\nwindow.MK_SCHED_PUB = ' + JSON.stringify(pub) + ';\n';
-    const api = 'https://api.github.com/repos/VitoKOK-lab/MK-monthly/contents/data/schedule/published.js';
+    const api = 'https://api.github.com/repos/wiggie0921-gif/MK-monthly/contents/data/schedule/published.js';
     const headers = { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json' };
     let sha;
-    const g = await fetch(api + '?ref=main', { headers });
+    const g = await fetch(api + '?ref=claude/monthly-sales-analysis-y27mxm', { headers });
     if (g.ok) sha = (await g.json()).sha;
     const put = await fetch(api, {
       method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message: `Publish schedule ${S.month}`,
         content: btoa(unescape(encodeURIComponent(content))),
-        sha, branch: 'main',
+        sha, branch: 'claude/monthly-sales-analysis-y27mxm',
       }),
     });
     if (!put.ok){
