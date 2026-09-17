@@ -411,6 +411,7 @@ function defaultState(){
       { name:'Kai',    role:'SA',  quota:10, week:{} },
       { name:'Bailey', role:'SA',  quota:10, week:{} },
       { name:'Vina',   role:'SA',  quota:10, week:{} },
+      { name:'博鴻',    role:'SA',  quota:0,  week:{}, excluded:true },
     ],
     trio: ['Wiggie','Liv','Demi'],
     trioMode: 'all3',
@@ -420,8 +421,16 @@ function defaultState(){
 }
 function normalize(s){
   s.staff.forEach(p => { if (!p.role) p.role = 'SA'; if (!p.week) p.week = {}; });
+  /* Wiggie 與博鴻只顯示於班表，不自動排班、也不計入人力需求。 */
+  const wiggie = s.staff.find(p => p.name === 'Wiggie');
+  if (wiggie) wiggie.excluded = true;
+  let bohong = s.staff.find(p => p.name === '博鴻');
+  if (!bohong){ bohong = { name:'博鴻', role:'SA', quota:0, week:{}, excluded:true }; s.staff.push(bohong); }
+  bohong.excluded = true; bohong.quota = 0;
+  s.staff = s.staff.filter(p => p !== bohong); s.staff.push(bohong); /* 博鴻固定最後 */
   if (!s.trioMode) s.trioMode = 'all3';
 }
+const isExcluded = i => !!S.staff[i]?.excluded;
 function saveState(){ try { localStorage.setItem(LS_KEY, JSON.stringify(S)); } catch(e){} }
 function loadState(){ try { return JSON.parse(localStorage.getItem(LS_KEY)); } catch(e){ return null; } }
 
@@ -456,7 +465,7 @@ function fixedOf(i){
 }
 const blockedOf = i => weeklyDays(i,'work');
 /* 總休假目標 = 正常額度 + 特殊假天數 */
-const totalQuota = i => S.staff[i].quota + specialSet(i).size;
+const totalQuota = i => isExcluded(i) ? 0 : S.staff[i].quota + specialSet(i).size;
 
 /* 每日需求：A 固定 1 人、P 固定 3 人；超過第 4 位上班者皆為 M。
    平日至少 4 人；假日至少 5 人，均不設最高人數。 */
@@ -497,6 +506,7 @@ function scoreOff(off, cfg){
   let sc = 0;
   const offCount = new Array(days+1).fill(0);
   for (let i=0;i<N;i++){
+    if (!cfg.active[i]) continue;
     let restDays = 0;
     for (const d of off[i]) { offCount[d]++; if (isRest(d) && !special[i].has(d)) restDays++; }
     if (off[i].size !== quotas[i]) sc += 1000 * Math.abs(off[i].size - quotas[i]);
@@ -511,7 +521,7 @@ function scoreOff(off, cfg){
     if (run > 4) sc += 500 * (run - 4);
   }
   for (let d=1; d<=days; d++){
-    const workers = N - offCount[d];
+    const workers = cfg.activeN - offCount[d];
     const dem = demand(d);
     if (workers < dem.min) sc += 1000 * (dem.min - workers);
     if (workers > dem.cap) sc += 1000 * (workers - dem.cap);
@@ -532,6 +542,7 @@ function solveOff(cfg, rng){
   const { days, N, quotas, fixed, blocked } = cfg;
   const off = [];
   for (let i=0;i<N;i++){
+    if (!cfg.active[i]) { off.push(new Set()); continue; }
     const s = new Set(fixed[i]);
     const pool = [];
     for (let d=1; d<=days; d++) if (!s.has(d) && !blocked[i].has(d)) pool.push(d);
@@ -634,7 +645,7 @@ function assignShifts(off, cfg){
   const mCount = new Array(N).fill(0);
   for (let d=1; d<=days; d++){
     const workers = [];
-    for (let i=0;i<N;i++) if (!off[i].has(d)) workers.push(i);
+    for (let i=0;i<N;i++) if (cfg.active[i] && !off[i].has(d)) workers.push(i);
     const dem = demand(d);
     workers.sort((a,b) => {
       const ca = mCount[a] + (d>1 && grid[a][d-1]===2 ? 0.6 : 0);
@@ -653,6 +664,7 @@ function assignShifts(off, cfg){
   for (let pass=0; pass<40; pass++){
     let hi=-1, lo=-1;
     for (let i=0;i<N;i++){
+      if (!cfg.active[i]) continue;
       if (hi<0 || mCount[i] > mCount[hi]) hi = i;
       if (lo<0 || mCount[i] < mCount[lo]) lo = i;
     }
@@ -676,8 +688,8 @@ function staffingFeasibility(cfg){
   let minOff = 0, maxOff = 0;
   for (let d=1; d<=cfg.days; d++){
     const dem = demand(d);
-    minOff += Math.max(0, cfg.N - dem.cap);
-    maxOff += cfg.N - dem.min;
+    minOff += Math.max(0, cfg.activeN - dem.cap);
+    maxOff += cfg.activeN - dem.min;
   }
   const plannedOff = cfg.quotas.reduce((sum,n) => sum + n, 0);
   if (plannedOff < minOff) return `目前休假總數 ${plannedOff} 天，但每日人力下限至少需要 ${minOff} 天休假，尚差 ${minOff-plannedOff} 天。`;
@@ -692,9 +704,10 @@ function generate(){
   setTimeout(() => {
     const { days } = monthInfo();
     const N = S.staff.length;
-    const trioIdx = S.trio.map(n => S.staff.findIndex(s => s.name===n)).filter(i => i>=0);
+    const trioIdx = S.trio.map(n => S.staff.findIndex(s => s.name===n)).filter(i => i>=0 && !isExcluded(i));
     /* 預檢 1：固定休超過額度 / 指休撞固定班 */
     for (let i=0;i<N;i++){
+      if (isExcluded(i)) continue;
       const fx = fixedOf(i), bl = blockedOf(i);
       if (fx.size > totalQuota(i)){
         document.getElementById('status').textContent = `⚠ ${S.staff[i].name}：固定休＋指休＋特殊假共 ${fx.size} 天 > 總額度 ${totalQuota(i)} 天（正常 ${S.staff[i].quota}＋特假 ${specialSet(i).size}）`;
@@ -720,6 +733,8 @@ function generate(){
     }
     const cfg = {
       days, N,
+      active: S.staff.map((_,i) => !isExcluded(i)),
+      activeN: S.staff.filter((_,i) => !isExcluded(i)).length,
       quotas: S.staff.map((_,i) => totalQuota(i)),
       fixed: S.staff.map((_,i) => fixedOf(i)),
       blocked: S.staff.map((_,i) => blockedOf(i)),
@@ -767,10 +782,11 @@ function validate(){
   const N = S.staff.length;
   const v = [];
   const stats = [];
-  const trioIdx = S.trio.map(n => S.staff.findIndex(s => s.name===n)).filter(i => i>=0);
+  const trioIdx = S.trio.map(n => S.staff.findIndex(s => s.name===n)).filter(i => i>=0 && !isExcluded(i));
   const mCounts = [];
   const prevRuns = previousWorkRuns();
   for (let i=0;i<N;i++){
+    if (isExcluded(i)){ stats.push({ offN:0, restOff:0, spN:0, m:0, mid:0, e:0, maxRun:0 }); continue; }
     const sp = specialSet(i);
     let offN=0, restOff=0, spN=0, m=0, mid=0, e=0, maxRun=0, run=prevRuns[i] || 0;
     for (let d=1; d<=days; d++){
@@ -799,7 +815,7 @@ function validate(){
     for (const i of trioIdx) if (grid[i][d]===3) c++;
     if (c>=th && th>=2) v.push(`${d} 日：互斥名單 ${c} 人同日休（${trioIdx.filter(i=>grid[i][d]===3).map(i=>S.staff[i].name).join('、')}）`);
     let m=0, mid=0, e=0, workers=0;
-    for (let i=0;i<N;i++){ const s=grid[i][d]; if(s!==3)workers++; if(s===0)m++; else if(s===1)mid++; else if(s===2)e++; }
+    for (let i=0;i<N;i++){ if (isExcluded(i)) continue; const s=grid[i][d]; if(s!==3)workers++; if(s===0)m++; else if(s===1)mid++; else if(s===2)e++; }
     const dem = demand(d);
     if (workers < dem.min || workers > dem.cap) v.push(`${d} 日：上班 ${workers} 人，應為 ${dem.min}–${dem.cap} 人`);
     const needMid = Math.max(0, workers - dem.m - dem.e);
@@ -834,7 +850,9 @@ function render(){
     const sp = specialOf(i);
     for (let d=1; d<=days; d++){
       const s = grid[i][d];
-      if (s===3 && sp[d]){
+      if (isExcluded(i)){
+        h += '<td><div class="cell s3" style="cursor:default">—</div></td>';
+      } else if (s===3 && sp[d]){
         h += `<td><button class="cell s3 sp" title="特殊假（於 Step 2 修改）" style="cursor:not-allowed;color:#8f7439;font-weight:700">${sp[d]}</button></td>`;
       } else {
         const man = manualEdits.has(i + ':' + d) ? 'manual' : '';
@@ -847,7 +865,7 @@ function render(){
   for (let d=1; d<=days; d++){
     const dem = demand(d);
     let m=0, mid=0, e=0, workers=0;
-    for (let i=0;i<N;i++){ const s=grid[i][d]; if(s!==3)workers++; if(s===0)m++; else if(s===1)mid++; else if(s===2)e++; }
+    for (let i=0;i<N;i++){ if (isExcluded(i)) continue; const s=grid[i][d]; if(s!==3)workers++; if(s===0)m++; else if(s===1)mid++; else if(s===2)e++; }
     const needMid = Math.max(0, workers - dem.m - dem.e);
     const short = m!==dem.m || mid!==needMid || e!==dem.e || workers<dem.min || workers>dem.cap;
     h += `<td class="${short?'short':''} num">${m}/${mid}/${e}</td>`;
@@ -858,6 +876,10 @@ function render(){
   let st = `<thead><tr><th>員工</th><th>職級</th><th>上班</th><th>正常休</th><th>BL/AL</th><th>假日休</th><th>A早班</th><th>M中班</th><th>P晚班</th><th>最長連上</th></tr></thead><tbody>`;
   for (let i=0;i<N;i++){
     const s = stats[i];
+    if (isExcluded(i)){
+      st += `<tr><td>${S.staff[i].name}</td><td>${S.staff[i].role}</td><td colspan="8" style="color:var(--muted)">不自動排班／不計入人力</td></tr>`;
+      continue;
+    }
     st += `<tr><td>${S.staff[i].name}</td><td>${S.staff[i].role}</td><td class="num">${days - s.offN - s.spN}</td>
       <td class="num ${s.offN!==S.staff[i].quota?'bad':''}">${s.offN}</td>
       <td class="num">${s.spN}</td>
@@ -1148,7 +1170,7 @@ function renderViewer(){
     const sp = (rec.special||{})[i] || {};
     for (let d=1; d<=rec.days; d++){
       const s = rec.grid[i][d];
-      const label = (s===3 && sp[d]) ? sp[d] : SHIFT_NAME[s];
+      const label = p.excluded ? '—' : ((s===3 && sp[d]) ? sp[d] : SHIFT_NAME[s]);
       const spStyle = (s===3 && sp[d]) ? 'color:#8f7439;font-weight:700' : '';
       h += `<td><div class="cell s${s}" style="cursor:default;${spStyle}${d===todayD?';outline:2px solid var(--gold);outline-offset:-2px':''}">${label}</div></td>`;
     }
@@ -1169,7 +1191,7 @@ function buildPubRecord(){
   return {
     days: RESULT.days,
     grid: RESULT.grid,
-    staff: S.staff.map(p => ({ name: p.name, role: p.role })),
+    staff: S.staff.map(p => ({ name: p.name, role: p.role, excluded: !!p.excluded })),
     holidays: S.holidays[S.month] || [],
     special: (S.special||{})[S.month] || {},
     savedAt: new Date().toISOString().slice(0,16).replace('T',' '),
