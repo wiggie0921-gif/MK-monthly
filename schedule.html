@@ -885,11 +885,12 @@ function generate(){
     }
     if (staffingIssues.length){
       const alRelief = findSingleALRelief(cfg, seed);
-      RESULT = null;
-      document.getElementById('resultSec').style.display = 'none';
+      /* 即使必要條件尚未滿足，仍呈現目前最佳結果供店長手動調整與匯出。 */
+      UNDO.length = 0; manualEdits.clear();
+      render();
       document.getElementById('status').textContent = alRelief
-        ? `⚠ 原始條件無解：${staffingIssues[0]}。試算顯示：若暫時移除 ${S.staff[alRelief.i].name} 的 ${alRelief.d} 日 AL，可滿足必要人力；請由店長確認後再修改該筆 AL。`
-        : `⚠ 無法在必要條件下產出班表：${staffingIssues[0]}。已試算單筆 AL 調整仍無解，請調整固定休、指休或特殊假後再試。`;
+        ? `⚠ 已產出可供手動調整的班表，尚有 ${staffingIssues.length} 項必要條件衝突：${staffingIssues[0]}。試算顯示：若暫時移除 ${S.staff[alRelief.i].name} 的 ${alRelief.d} 日 AL，可滿足必要人力。`
+        : `⚠ 已產出可供手動調整的班表，尚有 ${staffingIssues.length} 項必要條件衝突：${staffingIssues[0]}。可直接檢查、修改或下載 Excel；必要條件未滿足前不可發布。`;
       btn.disabled = false;
       return;
     }
